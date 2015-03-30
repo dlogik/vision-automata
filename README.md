@@ -4,9 +4,7 @@ COMP 9517 Computer Vision S1, 2015
 Group Project
 -------------
 
-This is a two-person project. Pick a project team member, and register your group 
-
-ONLINE by MONDAY week 5.
+This is a two-person project. Pick a project team member, and register your group ONLINE by MONDAY week 5.
 
 Project Synopsis
 ----------------
@@ -22,21 +20,13 @@ Image segmentation, feature description and object tracking form the foundation 
 
 Given a video with several (upto 3) objects of interest, the tasks are to detect the objects and track them through the video.
 
-1) You will need a video that contains objects that appear in most video frames, and 
+1) You will need a video that contains objects that appear in most video frames, and in particular in the first frame. This first frame may be used as a model frame.
 
-in particular in the first frame. This first frame may be used as a model frame.
+2) You can then use feature descriptors to match objects in the model frame to those in each frame (image) of the sequence.
 
-2) You can then use feature descriptors to match objects in the model frame to those 
+3) You should be able to display the estimated object locations in each frame in the video.
 
-in each frame (image) of the sequence.
-
-3) You should be able to display the estimated object locations in each frame in the 
-
-video.
-
-4) You should also display the ongoing object trajectories, based on the estimated 
-
-object locations in each frame in the video.
+4) You should also display the ongoing object trajectories, based on the estimated object locations in each frame in the video.
 
 Here are examples of the output with a single tracked object:
 
