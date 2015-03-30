@@ -1,5 +1,5 @@
 COMP 9517 Computer Vision S1, 2015
-==================================
+----------------------------------
 
 Group Project
 -------------
@@ -11,11 +11,7 @@ ONLINE by MONDAY week 5.
 Project Synopsis
 ----------------
 
-The project consists of two parts, with checkpoints built in to enable you to manage the 
-
-project and the deliverables. Read the project specification through carefully, and discuss 
-
-with potential team member before registering your group!
+The project consists of two parts, with checkpoints built in to enable you to manage the project and the deliverables. Read the project specification through carefully, and discuss with potential team member before registering your group!
 
 Part 1
 ------
@@ -50,8 +46,7 @@ http://www.youtube.com/watch?v=8q0h1VJLIpM
 
 There will be two bonus marks for implementing additional features such as real-time tracking (at least 10+ fps), or the ability to automatically track occluded objects in some of the video frames using techniques such as the Kalman/Particle filter.
 
-Testing of Part 1
------------------
+# Testing of Part 1
 
 In the assignment section of the course website, you will see links to a video sequence that you may use for testing during development. On the day of evaluation of Part 1, you will demo your program on another similar video sequence.
 
@@ -83,7 +78,7 @@ Week 13 Final Demo in lab + Performance Evaluation + Report (10 + 10 + 10
 
 marks)
 
-Total marks: 50
+### Total marks: 50
 
 Copyright: Arcot Sowmya, CSE, UNSW, with acknowledgments to COMP 9517 
 
