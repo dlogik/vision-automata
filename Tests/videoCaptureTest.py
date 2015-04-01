@@ -3,10 +3,11 @@ import cv2
 import time as t
 
 
+# Test frame by frame video capture from internal camera
+# on Macbook Pro.
 cap = cv2.VideoCapture(0)
 
 frames = 0
-
 start = t.time()
 
 while(True):
@@ -21,7 +22,14 @@ while(True):
 
     diff = t.time() - start
     frames += 1
+
+    # Print out time and frame rate
     print "{0} {1}".format(diff, (frames / diff))
+
+    # Reset counter every 1 second
+    if (diff > 1):
+      start = t.time()
+      frames = 0
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
