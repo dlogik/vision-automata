@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <iostream>
 #include <time.h>
+#include <ctime>
 #include <opencv/cv.h>
 #include <opencv/highgui.h>
 #include "opencv2/core/core.hpp"
@@ -18,6 +19,7 @@
 #include "opencv2/nonfree/features2d.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/nonfree/nonfree.hpp"
+#include <opencv2/video/tracking.hpp>
 
 using namespace std;
 using namespace cv;
@@ -56,6 +58,25 @@ void mouseHandler(int event, int x, int y, int flags, void* param) {
     }
 }
 
+double diffclock(clock_t clock1,clock_t clock2) {
+    double diffticks=clock1-clock2;
+    double diffms=(diffticks)/(CLOCKS_PER_SEC/1000);
+    return diffms;
+}
+
+void getCorners(Mat object, vector<Point2f> & obj_corners) {
+	obj_corners[0] = cvPoint(0,0); obj_corners[1] = cvPoint( object.cols, 0 );
+	obj_corners[2] = cvPoint( object.cols, object.rows ); obj_corners[3] = cvPoint( 0, object.rows );
+}
+
+double compareCorners(vector<Point2f> old, vector<Point2f> fresh) {
+	double diff = 0;
+	for (int i; i< old.size(); i++) {
+		diff += abs( norm(old[i])- norm(fresh[i]) ); 
+	}
+	return diff;
+}
+
 int selectFrame(VideoCapture* capture) {
 	// LET USER CROP OBJECT FROM FIRST FRAME
 	// Get the first frame of capture
@@ -70,7 +91,6 @@ int selectFrame(VideoCapture* capture) {
 	while (wait == true){
 		// wait untill enter is pressed
 		char waitKey = cvWaitKey(5);
-		cout<<"Key pressed: " << waitKey;
 		switch (waitKey) {
 			case 'a':
 			case 10: 	// 'enter' pressed: Finished cropping
@@ -91,20 +111,104 @@ int selectFrame(VideoCapture* capture) {
 	return 1;
 }
 
+void findGoodMatches(Mat descriptors_object, vector< DMatch > matches,vector< DMatch > & good_matches) {
+	//-- Quick calculation of max and min distances between keypoints
+	double max_dist = 0; double min_dist = 100;
+	for( int i = 0; i < descriptors_object.rows; i++ )
+	{ double dist = matches[i].distance;
+	if( dist < min_dist ) min_dist = dist;
+	if( dist > max_dist ) max_dist = dist;
+	}
+	//-- Keep only good matches (i.e. whose distance is less than 2*min_dist )
+	for( int i = 0; i < descriptors_object.rows; i++ )
+	{ if( matches[i].distance <= max(2*min_dist, 0.02) )
+	{ good_matches.push_back( matches[i]); }
+	}
+}
+
+void getKeyPoints(vector<KeyPoint> key1, vector<KeyPoint> key2, vector<DMatch> good_matches, vector<Point2f> & points1, vector<Point2f> & points2) {
+	for( int i = 0; i < good_matches.size(); i++ ) {
+		points1.push_back( key1[ good_matches[i].queryIdx ].pt );
+		points2.push_back( key2[ good_matches[i].trainIdx ].pt );
+	}
+}
+
+void drawObjectFrame(Mat & image, vector<Point2f> frame_corners) {
+	line( image, frame_corners[0], frame_corners[1], Scalar( 0, 255, 0), 4 );
+	line( image, frame_corners[1], frame_corners[2], Scalar( 0, 255, 0), 4 );
+	line( image, frame_corners[2], frame_corners[3], Scalar( 0, 255, 0), 4 );
+	line( image, frame_corners[3], frame_corners[0], Scalar( 0, 255, 0), 4 );
+}
+
+void matchAndTrack	(Mat object, Mat scene, vector<KeyPoint> keypoints_object, vector<KeyPoint> keypoints_scene,
+					Mat descriptors_object, Mat descriptors_scene, vector<Point2f> obj_corners, Mat img_matches, bool featuresEnabled) 
+{
+	// MATCH
+	clock_t start = clock();
+
+	FlannBasedMatcher matcher;
+	vector< DMatch > matches;	
+	matcher.match( descriptors_object, descriptors_scene, matches );
+
+	// FILTER OUT BAD MATCHES
+	vector< DMatch > good_matches;
+	findGoodMatches(descriptors_object, matches, good_matches);
+
+	//-- Get the keypoints from the good matches
+	vector<Point2f> obj_matches;
+	vector<Point2f> scene_matches;
+	getKeyPoints(keypoints_object, keypoints_scene, good_matches, obj_matches, scene_matches);
+
+	clock_t end = clock();
+	cout << "Find good matches " << diffclock(end, start) << "ms" << endl;
+	
+
+	if(obj_matches.size() >= 4) { // If we have 4 or more good matches
+		
+		start = clock();
+
+		Mat H = findHomography( obj_matches, scene_matches, CV_RANSAC );
+		end = clock();
+		// Use homography and obj_corners to find corners of object in the scene
+		vector<Point2f> scene_corners(4);
+		perspectiveTransform( obj_corners, scene_corners, H);
+
+		// Draw matches if featuresEnabled
+		if (featuresEnabled) {
+			drawMatches( object, keypoints_object, scene, keypoints_scene,
+           	good_matches, img_matches, Scalar::all(-1), Scalar::all(-1),
+           	vector<char>(), DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
+           	imshow("Matches", img_matches);
+      	} else {
+      		destroyWindow("Matches");
+      	}
+
+		drawObjectFrame(scene, scene_corners);
+
+		cout << "Find homography and draw object frame: " << diffclock(end, start) << "ms" << endl;
+		
+	
+	}
+	else {
+		cout << "Less than 4 good matches: Failed to find homography" << endl;
+	}
+}
+
+
 class Timer {
 	private:
 		// Timer variables
-		time_t start = time(0);
-		time_t diff;
+		clock_t start = clock();
 		int frames = 0;
+		double diff;
 	public:
 		void display() {
-			diff = time(0) - start;
 			frames++;
-			if (diff > 1) {
+			diff = diffclock(clock(), start);
+			if (diff > 1000) {
 				// Print frame rate
-				cout << "FPS: " << frames/diff << endl;
-				start = time(0);
+				cout << "FPS: " << frames*1000/diff << endl;
+				start = clock();
 				frames = 0;
 			}
 		}
@@ -112,8 +216,6 @@ class Timer {
 
 class MainWindow {
 	private:
-		// minHessian used for detecting features
-		int minHessian = 400;
 		FlannBasedMatcher matcher;
 		Mat img_matches;
 		// Homography
@@ -133,9 +235,14 @@ class MainWindow {
 		SurfDescriptorExtractor extractor;
 		bool featuresEnabled;
 
+		
+
 		void init() {
+		
+			// SURF(double hessianThreshold, int nOctaves=4, int nOctaveLayers=2, bool extended=true, bool upright=false )
 			featuresEnabled = false;
-			detector = SurfFeatureDetector(minHessian);
+			detector = SurfFeatureDetector(400, 4, 2, true, false);
+			extractor = SurfDescriptorExtractor(400, 4, 2, true, false);
 			obj_corners = vector<Point2f>(4);
 
 			// Create mainImage for visualization and make 'object' 'and 'scene' point to positions in it
@@ -147,16 +254,14 @@ class MainWindow {
 			mouse_roiImg.copyTo(object);
 			mouse_img.copyTo(scene);
 
-			// DISPLAY MAIN IMAGE
-			imshow("Main Image", mainImage);
 
 			// IMAGE PROCESSING FOR OBJECT (outside while-loop, since we only need to do it once)
 			//convert object to gray scale
 			cvtColor(object, grayObject, COLOR_BGR2GRAY);
 			detector.detect( grayObject, keypoints_object );
 			extractor.compute( grayObject, keypoints_object, descriptors_object );
-			obj_corners[0] = cvPoint(0,0); obj_corners[1] = cvPoint( object.cols, 0 );
-			obj_corners[2] = cvPoint( object.cols, object.rows ); obj_corners[3] = cvPoint( 0, object.rows );
+			
+			getCorners(object, obj_corners);
 
 			cout << "SETUP COMPLETED. PLAYING VIDEO..." << endl
 			<< "'t' - toggles tracking" << endl
@@ -169,78 +274,61 @@ class MainWindow {
 
 		void track(Mat* frame) {
 
+			clock_t start = clock();
 			//convert frame to gray scale
 			cvtColor(*frame, grayScene, COLOR_BGR2GRAY);
+			clock_t end = clock();
+			cout << "Convert scene to grayscale: " << diffclock(end, start) << "ms" << endl;
+
+			start = clock();
 			// DETECT the keypoints using SURF Detector
 			detector.detect( grayScene, keypoints_scene );
+			end = clock();
+			cout << "Detect scene: " << diffclock(end, start) << "ms" << endl;
+
+			start = clock();
 			// EXTRACT
 			extractor.compute( grayScene, keypoints_scene, descriptors_scene );
-			// MATCH
-			vector< DMatch > matches;
-			matcher.match( descriptors_object, descriptors_scene, matches );
+			end = clock();
+			cout << "Extract scene: " << diffclock(end, start) << "ms" << endl;
 
-			// FILTER OUT BAD MATCHES
-			//-- Quick calculation of max and min distances between keypoints
-			double max_dist = 0; double min_dist = 100;
-			for(int i = 0; i < descriptors_object.rows; i++ ) {
-				double dist = matches[i].distance;
-				if( dist < min_dist ) min_dist = dist;
-				if( dist > max_dist ) max_dist = dist;
-			}
-
-			//-- Keep only good matches (i.e. whose distance is less than 3*min_dist )
-			std::vector< DMatch > good_matches;
-			for(int i = 0; i < descriptors_object.rows; i++ ) {
-				if( matches[i].distance < 3*min_dist )	{
-					good_matches.push_back( matches[i]);
-				}
-			}
-
-			//-- Localize the object
-			vector<Point2f> obj_matches;
-			vector<Point2f> scene_matches;
-
-			//-- Get the keypoints from the good matches
-			for( int i = 0; i < good_matches.size(); i++ ) {
-				obj_matches.push_back( keypoints_object[ good_matches[i].queryIdx ].pt );
-				scene_matches.push_back( keypoints_scene[ good_matches[i].trainIdx ].pt );
-			}
-
-			if(obj_matches.size() >= 4) { // If we have 4 or more good matches
-				H = findHomography( obj_matches, scene_matches, CV_RANSAC );
-
-				// Use homography and obj_corners to find corners of object in the scene
-				vector<Point2f> scene_corners(4);
-				perspectiveTransform( obj_corners, scene_corners, H);
-
-				// Draw matches
-				if (featuresEnabled) {
-					drawMatches(object, keypoints_object, scene, keypoints_scene,
-					good_matches, img_matches, Scalar::all(-1), Scalar::all(-1),
-					vector<char>(), DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
-					imshow("Matches", img_matches);
-				} else {
-					destroyWindow("Matches");
-				}
-
-				// Frame the detected object
-				line( scene, scene_corners[0], scene_corners[1], Scalar( 0, 255, 0), 4 );
-				line( scene, scene_corners[1], scene_corners[2], Scalar( 0, 255, 0), 4 );
-				line( scene, scene_corners[2], scene_corners[3], Scalar( 0, 255, 0), 4 );
-				line( scene, scene_corners[3], scene_corners[0], Scalar( 0, 255, 0), 4 );
-			}
-			else {
-				cout << "Less than 4 good matches: Failed to find homography" << endl;
-			}
+			// MATCH OBJECT WITH SCENE
+			matchAndTrack(object, scene, keypoints_object, keypoints_scene, descriptors_object, descriptors_scene, 
+							obj_corners, img_matches, featuresEnabled);
 		}
 };
+
+bool toggleFunctionality(MainWindow & window, bool & trackingEnabled, bool & featuresEnabled, bool & redetect) {
+	switch(waitKey(1)) {
+		case 27: //'esc' key has been pressed, exit program.
+			return false;
+		case 116: //'t' has been pressed. this will toggle tracking
+			trackingEnabled = !trackingEnabled;
+			if(trackingEnabled == false) cout<<"Tracking disabled."<<endl;
+			else cout<<"Tracking enabled."<<endl;
+			break;
+		case 102: //'f' has been pressed. this will toggle feature points
+			featuresEnabled = !featuresEnabled;
+			if(featuresEnabled == false) cout<<"Feature points disabled."<<endl;
+			else cout<<"Feature points enabled."<<endl;
+			window.featuresEnabled = featuresEnabled;
+			break;
+		case 112: //'p' has been pressed. this will pause/resume the code.
+			cout<<"Code paused, press 'p' again to resume"<<endl;
+			waitKey();
+			cout<<"Code resumed."<<endl;
+			break;
+		case 'r':
+			redetect = true;
+	}
+	return true;
+}
 
 int main(){
 
 	//some boolean variables for added functionality
-	bool trackingEnabled = false; 	// Press 't' to toggle
+	bool trackingEnabled = true; 	// Press 't' to toggle
 	bool featuresEnabled = false;	// Press 'f' to toggle
-	bool pause = false;				// Press 'p' to toggle
 	bool redetect = false;			// Allows for new selection via mouse region.
 	
 	Timer timer = Timer();
@@ -253,13 +341,16 @@ int main(){
 
 	cout << "SURFTRACK IS RUNNING" << endl;
 	// Open video stream from webcam
-	capture.open(0);
-
+	//capture.open(0);
+	capture.open(0);  // "clip_test.m4v"
 	if(!capture.isOpened()) {
 		cout<<"ERROR ACQUIRING VIDEO FEED\n";
 		getchar();
 		return -1;
 	}
+
+	capture.read(mouse_img);
+	//mouse_roiImg = cvLoadImage("poster.png"); 
 
 	// Skip first 5 frames, Macbook camera seems to take a while to initalise.
 	for (int i = 0; i <= 5; i++) {
@@ -277,8 +368,6 @@ int main(){
 		//read first frame
 		capture.read(frame);			
 
-		// IMAGE PROCESSING AND TRACKING
-
 		// put frame in the main image
 		frame.copyTo(window.scene);
 
@@ -292,7 +381,10 @@ int main(){
 		}
 
 		if (trackingEnabled) {
+			clock_t start = clock();
 			window.track(&frame);
+			clock_t end = clock();
+			cout << "Total tracking time: " << diffclock(end, start) << "ms" << endl << endl;
 		}
 		
 		// DISPLAY
@@ -301,38 +393,11 @@ int main(){
 		// TIMER
 		timer.display();
 
-		//CHECKS TO SEE IF A BUTTON HAS BEEN PRESSED AND TOGGLES FLAGS
-		switch(waitKey(10)) {
-			case 27: //'esc' key has been pressed, exit program.
-				return 0;
-			case 116: //'t' has been pressed. this will toggle tracking
-				trackingEnabled = !trackingEnabled;
-				if(trackingEnabled == false) cout<<"Tracking disabled."<<endl;
-				else cout<<"Tracking enabled."<<endl;
-				break;
-			case 102: //'f' has been pressed. this will toggle feature points
-				featuresEnabled = !featuresEnabled;
-				if(featuresEnabled == false) cout<<"Feature points disabled."<<endl;
-				else cout<<"Feature points enabled."<<endl;
-				window.featuresEnabled = featuresEnabled;
-				break;
-			case 112: //'p' has been pressed. this will pause/resume the code.
-				pause = !pause;
-				if(pause == true){
-					cout<<"Code paused, press 'p' again to resume"<<endl;
-					while (pause == true){
-						switch (waitKey()){
-						case 112:
-							pause = false;
-							cout<<"Code resumed."<<endl;
-							break;
-						}
-					}
-				}
-				break;
-			case 'r':
-				redetect = true;
-			}
+		//CHECKS TO SEE IF A BUTTON HAS BEEN PRESSED AND TOGGLES FLAGS.
+		if (toggleFunctionality(window, trackingEnabled, featuresEnabled, redetect) == false) {
+			return 0;
+		}
+		
 	}
 	return 0;
 }
