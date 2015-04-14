@@ -12,6 +12,19 @@ mouse to select areas for tracking targets.
 
 Tested with OpenCV version 2.4.11
 
+1. Program peforms ORB detection and extraction for the target frame, using the
+    ORB detectAndCompute method and filters for the region specified by the user. (Oriented FAST and Rotated BRIEF)
+
+2. For every subsequent frame, compute detection and extraction of features.
+
+3. Perform Fast Approximate Nearest Neighbor Search Library (FLANN) to match key points.
+
+4. Performs homography calculation with RANSAC
+
+5. Performs perspective transform
+
+5. Visualises on the frame.
+
 '''
 
 import numpy as np
@@ -27,11 +40,20 @@ FLANN_PARAMETERS = dict(algorithm = FLANN_INDEX_LSH,
                    multi_probe_level = 1)
 
 # Minimum matches required by the flann feature detector before we attempt the homography matrix and perspective transform operations.
-MIN_MATCH_COUNT = 10
+MIN_MATCH_COUNT = 6
+
+# Max features
 ORB_FEATURES = 1000
 
 # Maximum distance used by the FlannBasedMatcher
-MAX_DISTANCE = 0.75
+MAX_DISTANCE = 0.5
+
+#Allowed reprojection error using by RANSAC
+RANSAC_THRESHOLD = 3.0
+
+showPoints = False
+
+visualisePoints = True
 
 ''' Timer class so we can caculate some tracking performance metrics '''
 class Timer:
@@ -49,14 +71,14 @@ class Timer:
     def printFPSRate(self):
         diff = t.time() - self.start
         self.frames += 1
+        # Print out time and frame rate
+        #if self.showTimer:
+        print "{0} {1}".format('FPS: ', (int)(self.frames / diff))
+        self.start = t.time()
+        self.frames = 0
 
         # Reset counter every 1 second and print
-        if (np.int16(diff) == 1):
-            # Print out time and frame rate
-            if self.showTimer:
-                print "{0} {1}".format('FPS: ', (int)(self.frames / diff))
-            self.start = t.time()
-            self.frames = 0
+        #if (np.int16(diff) == 1):
 
     def startMSTimer(self, msg):
         self.msTimer.setdefault(msg, []).append((t.time(), None))
@@ -64,24 +86,14 @@ class Timer:
     def stopMSTimer(self, msg):
         start, end = self.msTimer[msg][-1]
         diff = (t.time() - start) * 1000
+        print "{0}: {1} ms".format(msg, round(diff, 2))
         self.msTimer[msg][-1] = (start, diff)
-
-    def printAll(self):
-        if self.showTimer:
-            for msg, timer in self.msTimer.iteritems():
-                totalNumbers = len(timer)
-                if totalNumbers == 10:
-                    times = 0
-                    for time in timer:
-                        times += time[1]
-                    # Take the average of time samples
-                    print "{0}: {1} ms".format(msg, round(times / len(timer), 2))
-                    self.msTimer[msg] = []
+        self.msTimer[msg] = []
 
 ''' Instantiate timer class '''
 timer = Timer()
 
-''' Class stores points and descriptors for tracking target '''
+''' Class stores points and descriptors for the tracking target '''
 class Target:
 
     def __init__(self):
@@ -116,17 +128,17 @@ class TrackResult:
 
     def __init__(self, target, src_points, dst_points):
         self.target = target
-        p0, p1 = np.float32((src_points, dst_points))
-        self.src_points = p0
-        self.dst_points = p1
+        src, dst = np.float32((src_points, dst_points))
+        self.src_points = src
+        self.dst_points = dst
         self.valid = False
         self.findHomographyAndTransform()
 
     ''' Finds the homography matrix between target and input points. We then perform a perspective transform so we can visualise the tracked object(s) '''
     def findHomographyAndTransform(self):
-        timer.startMSTimer("Find homography")
-        H, status = cv2.findHomography(self.src_points, self.dst_points, cv2.RANSAC, 3.0)
-        timer.stopMSTimer("Find homography")
+        timer.startMSTimer("Find homography RANSAC")
+        H, status = cv2.findHomography(self.src_points, self.dst_points, cv2.RANSAC, RANSAC_THRESHOLD)
+        timer.stopMSTimer("Find homography RANSAC")
         if (status is None):
             return None
         status = status.ravel() != 0
@@ -165,14 +177,17 @@ class TrackResult:
     for in the targets array. '''
 class ORBTracker:
     def __init__(self):
-        self.detector = cv2.ORB( nfeatures = ORB_FEATURES )
+        self.detector = cv2.ORB( nfeatures = ORB_FEATURES, edgeThreshold = 2, patchSize = 31, WTA_K=3, scoreType=1)
         self.matcher = cv2.FlannBasedMatcher(FLANN_PARAMETERS,
             dict(checks = 50))
         self.targets = []
 
-    def addTarget(self, image, rectangle):
+    ''' Step 1: Detects features for the given target boundary '''
+    def addTarget(self, image, rectangle, visualiseFrame):
         x0, y0, x1, y1 = rectangle
         points, descriptors = self.detectFeatures(image)
+
+        #self.visualisePoints(points, visualiseFrame)
 
         # Instantiate the target class
         target = Target()
@@ -182,10 +197,30 @@ class ORBTracker:
 
         # Add descriptors to the flann matcher.
         descriptors = np.uint8(target.descriptors)
+
+        print "Descriptors found: {}".format(len(descriptors))
         self.matcher.add([descriptors])
 
         # Store target in the targets array.
         self.targets.append(target)
+
+    def visualisePoints(self, visualiseFrame):
+        if len(self.targets) > 0:
+            for target in self.targets:
+                if showPoints:
+                    print "Number of points: {}".format(len(target.points))
+                for point in target.points:
+                    x, y = np.int32(point.pt)
+                    #print "X: {} Y: {}".format(x, y)
+                    cv2.circle(visualiseFrame, (x, y), 1, (200, 255, 200))
+
+    def visualisePoints2(self, visualiseFrame, points):
+        for point in points:
+            x, y = point
+            if showPoints:
+                print "X: {} Y: {}".format(x, y)
+            cv2.circle(visualiseFrame, (x, y), 1, (200, 255, 200))
+
 
     ''' Performs tracking on provided frame '''
     def track(self, frame):
@@ -193,6 +228,7 @@ class ORBTracker:
         if len(points) < MIN_MATCH_COUNT:
             return []
 
+        ''' Use FLANN matcher to find good matches. '''
         knnMatches = self.getKnnMatches(descriptors)
         if knnMatches is None:
             return []
@@ -208,8 +244,8 @@ class ORBTracker:
                 continue
             target = self.targets[index]
             target_points = target.points
-            p0, p1 = self.getTargetInputPoints(matches, target_points, points)
-            trackResult = TrackResult(target, p0, p1)
+            src, dst = self.getTargetInputPoints(matches, target_points, points)
+            trackResult = TrackResult(target, src, dst)
             if trackResult.valid:
                 trackResults.append(trackResult)
 
@@ -225,6 +261,7 @@ class ORBTracker:
         goodMatches = []
         retDict = {}
 
+        ''' Filter out matches based on the maximum distance parameter '''
         for m in knnMatches:
             # Ensure tuple has two values.
             if len(m) == 2:
@@ -232,6 +269,7 @@ class ORBTracker:
                     goodMatches.append(m[0])
         if len(goodMatches) < MIN_MATCH_COUNT:
             return None
+        print "Good matches: {}".format(len(goodMatches))
         for match in goodMatches:
             if match.imgIdx not in retDict:
                 retDict[match.imgIdx] = []
@@ -248,14 +286,20 @@ class ORBTracker:
             input_point = input_points[match.queryIdx].pt
             src.append(target_point)
             dst.append(input_point)
+
+        #print "Target points: {}".format(src)
+        #print "Input points: {}".format(dst)
         return src, dst
 
     ''' Uses ORB matcher to detect keypoints and features for given
         frame '''
     def detectFeatures(self, frame):
         timer.startMSTimer("Detect keypoints")
-        keypoints, descriptors = self.detector.detectAndCompute(frame, None)
+        keypoints = self.detector.detect(frame, None)
         timer.stopMSTimer("Detect keypoints")
+        timer.startMSTimer("Compute descriptors")
+        keypoints, descriptors = self.detector.compute(frame, keypoints)
+        timer.stopMSTimer("Compute descriptors")
         if descriptors is None:
             descriptors = []
         return (keypoints, descriptors)
@@ -279,9 +323,11 @@ class MouseFrame:
     ''' Mouse callback event handler '''
     def mouseEvents(self, event, x, y, flags, param):
         x, y = np.int32([x, y])
+        # Mouse down event
         if event == cv2.EVENT_LBUTTONDOWN:
             self.start = (x, y)
             self.drawing = True
+        # Mouse up event
         if event == cv2.EVENT_LBUTTONUP:
             print "Mouse up"
             self.drawing = False
@@ -289,6 +335,7 @@ class MouseFrame:
                 self.callback(self.rectangle)
             self.start = None
             self.rectangle = None
+        # Mouse move event
         if event == cv2.EVENT_MOUSEMOVE and self.drawing == True:
             xo, yo = self.start
             x0, y0 = np.minimum([xo, yo], [x, y])
@@ -313,6 +360,7 @@ class App:
         self.video = cv2.VideoCapture(src)
         self.frame = None
         self.paused = False
+        self.visualise = None
 
         # Initalise the tracker class
         self.tracker = ORBTracker()
@@ -321,12 +369,18 @@ class App:
 
     def mouseCallback(self, rectangle):
         print "Adding image target: {}".format(rectangle)
-        self.tracker.addTarget(self.frame, rectangle)
+        self.tracker.addTarget(self.frame, rectangle, self.visualise)
 
     ''' Draws the rectangle overlay on the frame '''
     def drawOverlay(self, frame, tracks):
         for track in tracks:
             cv2.polylines(frame, [np.int32(track.rectangle)], True, (0, 255, 0), 2)
+            self.tracker.visualisePoints2(frame, track.dstPoints)
+
+    def close(self):
+        self.tracker.clear()
+        self.video.release()
+        cv2.destroyAllWindows()
 
     def start(self):
         count = 0
@@ -340,7 +394,7 @@ class App:
                     break
                 self.frame = frame.copy()
 
-            visualise = self.frame.copy()
+            self.visualise = self.frame.copy()
 
             # Pause on first frame of video.
             if (count == 0):
@@ -353,13 +407,16 @@ class App:
             if playing:
                 timer.startMSTimer('Total tracking time')
                 tracks = self.tracker.track(self.frame)
-                self.drawOverlay(visualise, tracks)
+                self.drawOverlay(self.visualise, tracks)
                 timer.stopMSTimer('Total tracking time')
+                timer.printFPSRate()
 
-            self.mouseFrame.draw(visualise)
-            timer.printFPSRate()
-            timer.printAll()
-            cv2.imshow('Video', visualise)
+            self.mouseFrame.draw(self.visualise)
+
+            if visualisePoints:
+                self.tracker.visualisePoints(self.visualise)
+
+            cv2.imshow('Video', self.visualise)
 
             waitKey = cv2.waitKey(1)
             if waitKey == ord('c'):
@@ -367,6 +424,7 @@ class App:
             if waitKey == ord('p'):
                 self.paused = not self.paused
             if waitKey == 27:
+                self.close()
                 break
 
 def init():
