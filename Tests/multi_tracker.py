@@ -4,18 +4,21 @@
 multi_tracker.py [optional video file]
 
 If no video file is provided, internal camera is selected. Use
-mouse to areas tracking targets.
+mouse to select areas for tracking targets.
 
 'p' - toggles pause
 'c' - clear tracking targets
 'esc' - quit program
 
+Tested with OpenCV version 2.4.11
+
 '''
 
 import numpy as np
 import cv2, sys
+import time as t
 
-# Default FLANN parameters taken from OpenCV
+# Default FLANN parameters taken from OpenCV examples
 FLANN_INDEX_KDTREE = 1
 FLANN_INDEX_LSH    = 6
 FLANN_PARAMETERS = dict(algorithm = FLANN_INDEX_LSH,
@@ -23,12 +26,60 @@ FLANN_PARAMETERS = dict(algorithm = FLANN_INDEX_LSH,
                    key_size = 12,
                    multi_probe_level = 1)
 
+# Minimum matches required by the flann feature detector before we attempt the homography matrix and perspective transform operations.
 MIN_MATCH_COUNT = 10
 ORB_FEATURES = 1000
 
 # Maximum distance used by the FlannBasedMatcher
 MAX_DISTANCE = 0.75
 
+''' Timer class so we can caculate some tracking performance metrics '''
+class Timer:
+    def __init__(self):
+        self.frames = 0
+        self.start = t.time()
+        self.msTimer = {}
+        self.showTimer = True
+        self.count = 0
+
+    @property
+    def showTimer(self):
+        return self.showTimer
+
+    def printFPSRate(self):
+        diff = t.time() - self.start
+        self.frames += 1
+
+        # Reset counter every 1 second and print
+        if (np.int16(diff) == 1):
+            # Print out time and frame rate
+            if self.showTimer:
+                print "{0} {1}".format('FPS: ', (int)(self.frames / diff))
+            self.start = t.time()
+            self.frames = 0
+
+    def startMSTimer(self, msg):
+        self.msTimer.setdefault(msg, []).append((t.time(), None))
+
+    def stopMSTimer(self, msg):
+        start, end = self.msTimer[msg][-1]
+        diff = (t.time() - start) * 1000
+        self.msTimer[msg][-1] = (start, diff)
+
+    def printAll(self):
+        if self.showTimer:
+            for msg, timer in self.msTimer.iteritems():
+                totalNumbers = len(timer)
+                if totalNumbers == 10:
+                    times = 0
+                    for time in timer:
+                        times += time[1]
+                    # Take the average of time samples
+                    print "{0}: {1} ms".format(msg, round(times / len(timer), 2))
+                    self.msTimer[msg] = []
+
+''' Instantiate timer class '''
+timer = Timer()
 
 ''' Class stores points and descriptors for tracking target '''
 class Target:
@@ -73,15 +124,21 @@ class TrackResult:
 
     ''' Finds the homography matrix between target and input points. We then perform a perspective transform so we can visualise the tracked object(s) '''
     def findHomographyAndTransform(self):
+        timer.startMSTimer("Find homography")
         H, status = cv2.findHomography(self.src_points, self.dst_points, cv2.RANSAC, 3.0)
+        timer.stopMSTimer("Find homography")
         if (status is None):
             return None
         status = status.ravel() != 0
         if status.sum() < MIN_MATCH_COUNT:
             return None
+
+        timer.startMSTimer("Perspective transform")
         x0, y0, x1, y1 = self.target.rectangle
         rectangle = np.float32([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
         transform = cv2.perspectiveTransform(rectangle.reshape(1, -1, 2), H).reshape(-1, 2)
+        timer.stopMSTimer("Perspective transform")
+
         self.rectangle = transform
         self.src_points = self.src_points[status]
         self.dst_points = self.dst_points[status]
@@ -162,7 +219,9 @@ class ORBTracker:
         set of descriptors. Results are then filtered based on
         the minimum distance from the descriptors stored in the matcher (added in the addTarget method. '''
     def getKnnMatches(self, descriptors):
+        timer.startMSTimer("FlannBasedMatcher")
         knnMatches = self.matcher.knnMatch(descriptors, k = 2)
+        timer.stopMSTimer("FlannBasedMatcher")
         goodMatches = []
         retDict = {}
 
@@ -194,13 +253,15 @@ class ORBTracker:
     ''' Uses ORB matcher to detect keypoints and features for given
         frame '''
     def detectFeatures(self, frame):
+        timer.startMSTimer("Detect keypoints")
         keypoints, descriptors = self.detector.detectAndCompute(frame, None)
+        timer.stopMSTimer("Detect keypoints")
         if descriptors is None:
             descriptors = []
         return (keypoints, descriptors)
 
     def clear(self):
-        '''Remove all targets'''
+        print "Clearing tracking targets"
         self.targets = []
         self.matcher.clear()
 
@@ -269,6 +330,8 @@ class App:
 
     def start(self):
         count = 0
+
+        timer.showTimer = True
         while True:
             playing = not self.paused and not self.mouseFrame.drawing
             if playing or self.frame is None:
@@ -283,12 +346,19 @@ class App:
             if (count == 0):
                 self.paused = True
             count += 1
+            # Overflow protection
+            if (count == 100):
+                count =1
 
             if playing:
+                timer.startMSTimer('Total tracking time')
                 tracks = self.tracker.track(self.frame)
                 self.drawOverlay(visualise, tracks)
+                timer.stopMSTimer('Total tracking time')
 
             self.mouseFrame.draw(visualise)
+            timer.printFPSRate()
+            timer.printAll()
             cv2.imshow('Video', visualise)
 
             waitKey = cv2.waitKey(1)
