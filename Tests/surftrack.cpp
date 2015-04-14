@@ -1,5 +1,5 @@
 //	surftrack.cpp
-//	Tarje Sandvik, April 2015
+//	Vision Automata
 //	2015-04-08 06:35 
 //
 // 	Opens up a capture from webcam, and lets the user crop out an object from the first frame. 
@@ -175,7 +175,7 @@ void matchAndTrack	(Mat object, Mat scene, vector<KeyPoint> keypoints_object, ve
 
 		// Draw matches if featuresEnabled
 		if (featuresEnabled) {
-			drawMatches( object, keypoints_object, scene, keypoints_scene,
+			drawMatches(object, keypoints_object, scene, keypoints_scene,
            	good_matches, img_matches, Scalar::all(-1), Scalar::all(-1),
            	vector<char>(), DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
            	imshow("Matches", img_matches);
@@ -241,8 +241,8 @@ class MainWindow {
 		
 			// SURF(double hessianThreshold, int nOctaves=4, int nOctaveLayers=2, bool extended=true, bool upright=false )
 			featuresEnabled = false;
-			detector = SurfFeatureDetector(400, 4, 2, true, false);
-			extractor = SurfDescriptorExtractor(400, 4, 2, true, false);
+			detector = SurfFeatureDetector(1000, 1, 1, false, false);
+			extractor = SurfDescriptorExtractor(1000, 1, 1, false, false);
 			obj_corners = vector<Point2f>(4);
 
 			// Create mainImage for visualization and make 'object' 'and 'scene' point to positions in it
@@ -262,6 +262,8 @@ class MainWindow {
 			extractor.compute( grayObject, keypoints_object, descriptors_object );
 			
 			getCorners(object, obj_corners);
+
+			drawKeypoints( object, keypoints_object, object, Scalar::all(-1), DrawMatchesFlags::DEFAULT );
 
 			cout << "SETUP COMPLETED. PLAYING VIDEO..." << endl
 			<< "'t' - toggles tracking" << endl
@@ -342,7 +344,7 @@ int main(){
 	cout << "SURFTRACK IS RUNNING" << endl;
 	// Open video stream from webcam
 	//capture.open(0);
-	capture.open(0);  // "clip_test.m4v"
+	capture.open("mb1");  // "clip_test.m4v"
 	if(!capture.isOpened()) {
 		cout<<"ERROR ACQUIRING VIDEO FEED\n";
 		getchar();
@@ -353,9 +355,9 @@ int main(){
 	//mouse_roiImg = cvLoadImage("poster.png"); 
 
 	// Skip first 5 frames, Macbook camera seems to take a while to initalise.
-	for (int i = 0; i <= 5; i++) {
-		capture.read(mouse_img);
-	}
+	//for (int i = 0; i <= 5; i++) {
+	//	capture.read(mouse_img);
+	//}
 
 	if (selectFrame(&capture) == 0) {
 		return 0;
