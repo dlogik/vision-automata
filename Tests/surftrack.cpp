@@ -121,7 +121,8 @@ void findGoodMatches(Mat descriptors_object, vector< DMatch > matches,vector< DM
 	}
 	//-- Keep only good matches (i.e. whose distance is less than 2*min_dist )
 	for( int i = 0; i < descriptors_object.rows; i++ )
-	{ if( matches[i].distance <= max(2*min_dist, 0.02) )
+	{ if( matches[i].distance <= max(0.2, 0.02) ) // 2*min_dist
+		//cout << "Distance: " << matches[i].distance << endl;
 	{ good_matches.push_back( matches[i]); }
 	}
 }
@@ -140,8 +141,14 @@ void drawObjectFrame(Mat & image, vector<Point2f> frame_corners) {
 	line( image, frame_corners[3], frame_corners[0], Scalar( 0, 255, 0), 4 );
 }
 
+Point2f getTopLeft(vector<Point2f> corners, float & x, float & y) {
+	x = corners[0].x;
+	y = corners[0].y;
+}
+
+
 void matchAndTrack	(Mat object, Mat scene, vector<KeyPoint> keypoints_object, vector<KeyPoint> keypoints_scene,
-					Mat descriptors_object, Mat descriptors_scene, vector<Point2f> obj_corners, Mat img_matches, bool featuresEnabled) 
+					Mat descriptors_object, Mat descriptors_scene, vector<Point2f> obj_corners, Mat img_matches, bool featuresEnabled, KalmanFilter KF, Mat_<float> measurement, Mat_<float> state) 
 {
 	// MATCH
 	clock_t start = clock();
@@ -162,6 +169,10 @@ void matchAndTrack	(Mat object, Mat scene, vector<KeyPoint> keypoints_object, ve
 	clock_t end = clock();
 	cout << "Find good matches " << diffclock(end, start) << "ms" << endl;
 	
+
+	// Klaman prediction
+	Mat prediction = KF.predict();
+    Point predictPt(prediction.at<float>(0),prediction.at<float>(1));
 
 	if(obj_matches.size() >= 4) { // If we have 4 or more good matches
 		
@@ -187,10 +198,34 @@ void matchAndTrack	(Mat object, Mat scene, vector<KeyPoint> keypoints_object, ve
 
 		cout << "Find homography and draw object frame: " << diffclock(end, start) << "ms" << endl;
 		
+		// KALMAN FILTER
+		start = clock();
+		float x, y;
+		getTopLeft(scene_corners, x, y);
+		
+        measurement(0) = x;
+		measurement(1) = y;
+		
+		Point measPt(measurement(0),measurement(1));
+        // generate measurement
+        measurement += KF.measurementMatrix*state;
+
+		Mat estimated = KF.correct(measurement);
+		Point statePt(estimated.at<float>(0),estimated.at<float>(1));
+
+
+		circle(scene, statePt, 10, Scalar(255,255,255), 5, 8, 0);
+		end = clock();
+		cout << "Kalman filtering: " << diffclock(end, start) << "ms" << endl;
+
+
+
 	
 	}
 	else {
 		cout << "Less than 4 good matches: Failed to find homography" << endl;
+		circle(scene, predictPt, 10, Scalar(0,0,255), 2, 8, 0);
+
 	}
 }
 
@@ -241,8 +276,8 @@ class MainWindow {
 		
 			// SURF(double hessianThreshold, int nOctaves=4, int nOctaveLayers=2, bool extended=true, bool upright=false )
 			featuresEnabled = false;
-			detector = SurfFeatureDetector(1000, 1, 1, false, false);
-			extractor = SurfDescriptorExtractor(1000, 1, 1, false, false);
+			detector = SurfFeatureDetector(500, 4, 2, true, false);
+			extractor = SurfDescriptorExtractor(500, 4, 2, true, false);
 			obj_corners = vector<Point2f>(4);
 
 			// Create mainImage for visualization and make 'object' 'and 'scene' point to positions in it
@@ -274,7 +309,9 @@ class MainWindow {
 			<< endl;
 		}
 
-		void track(Mat* frame) {
+		
+
+		void track(Mat* frame, KalmanFilter KF, Mat_<float> measurement, Mat_<float> state) {
 
 			clock_t start = clock();
 			//convert frame to gray scale
@@ -296,7 +333,7 @@ class MainWindow {
 
 			// MATCH OBJECT WITH SCENE
 			matchAndTrack(object, scene, keypoints_object, keypoints_scene, descriptors_object, descriptors_scene, 
-							obj_corners, img_matches, featuresEnabled);
+							obj_corners, img_matches, featuresEnabled, KF, measurement, state);
 		}
 };
 
@@ -328,11 +365,34 @@ bool toggleFunctionality(MainWindow & window, bool & trackingEnabled, bool & fea
 
 int main(){
 
+	// KALMAN SETUP
+	vector<Point> kalmanv;
+	KalmanFilter KF(4, 2, 0);
+    Mat_<float> state(4, 1); /* (x, y, Vx, Vy) */
+    Mat processNoise(4, 1, CV_32F);
+    Mat_<float> measurement(2,1); measurement.setTo(Scalar(0));
+    char code = (char)-1;
+
+    KF.statePre.at<float>(0) = 0;
+	KF.statePre.at<float>(1) = 0;
+	KF.statePre.at<float>(2) = 0;
+	KF.statePre.at<float>(3) = 0;
+	KF.transitionMatrix = *(Mat_<float>(4, 4) << 1,0,0,0,   0,1,0,0,  0,0,1,0,  0,0,0,1);
+	
+    setIdentity(KF.measurementMatrix);
+    setIdentity(KF.processNoiseCov, Scalar::all(1e-4));
+    setIdentity(KF.measurementNoiseCov, Scalar::all(1e-1));
+    setIdentity(KF.errorCovPost, Scalar::all(.1));
+	
+	kalmanv.clear();
+
+    // KALMAN SETUP DONE
+
 	//some boolean variables for added functionality
 	bool trackingEnabled = true; 	// Press 't' to toggle
 	bool featuresEnabled = false;	// Press 'f' to toggle
 	bool redetect = false;			// Allows for new selection via mouse region.
-	
+
 	Timer timer = Timer();
 
 	// image for reading capture
@@ -344,7 +404,7 @@ int main(){
 	cout << "SURFTRACK IS RUNNING" << endl;
 	// Open video stream from webcam
 	//capture.open(0);
-	capture.open("mb1");  // "clip_test.m4v"
+	capture.open(0);  // "clip_test.m4v"
 	if(!capture.isOpened()) {
 		cout<<"ERROR ACQUIRING VIDEO FEED\n";
 		getchar();
@@ -384,7 +444,7 @@ int main(){
 
 		if (trackingEnabled) {
 			clock_t start = clock();
-			window.track(&frame);
+			window.track(&frame, KF, measurement, state);
 			clock_t end = clock();
 			cout << "Total tracking time: " << diffclock(end, start) << "ms" << endl << endl;
 		}
