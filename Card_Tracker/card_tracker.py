@@ -7,6 +7,10 @@ import numpy as np
 import cv2
 import time as t
 import math, sys, os
+import optFlow as of
+import threading
+from itertools import chain
+
 
 # Resize scale factor for performance testing
 resize = 0.7
@@ -40,7 +44,7 @@ def putText(img, text, pos):
 	cv2.putText(img,text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255))
 
 # Maximum distance used by the FlannBasedMatcher
-MAX_DISTANCE = 0.75
+MAX_DISTANCE = 0.65
 MIN_MATCH_COUNT = 40
 
 class Stats():
@@ -91,7 +95,8 @@ class Matching():
 		if len(self.descriptors) == 0:
 			self.detect_points()
 		des = self.sift(self.sharpen(img), 'sift1')
-		return self.match_all(des)
+		success, cardName = self.match_all(des)
+		return success, cardName
 
 	# Helper for match function, iterates all training file features.
 	def match_all(self, des):
@@ -101,11 +106,13 @@ class Matching():
 				msg = 'found: {}'.format(key)
 				stats.add_found_card(msg)
 				print msg
+				return True, key.replace('.png', '')
+		return False, None
 
 	# Performs SIFT
 	def sift(self, img, name):
 		gray1 = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-		sift = cv2.SIFT()
+		sift = cv2.SIFT(edgeThreshold=15)
 		kp, des = sift.detectAndCompute(gray1,None)
 		key1 = cv2.drawKeypoints(gray1,kp)
 		show_debug_img(name, key1)
@@ -207,12 +214,14 @@ class Tracking():
 		self.rioImage = None
 		self.canny_thres = 50
 		self.stats = stats
+		self.grey_frame = None
 
 	def get_diff(self, grey_image, grey_base):
 		return cv2.absdiff(grey_image, grey_base)
 
 	def detect_card(self, frame, grey_image, min_perim=600, thresh=200):
 		edges = cv2.Canny(grey_image, thresh, thresh)
+		self.grey_frame = grey_image
 
 		show_debug_img('edges', edges)
 
@@ -236,18 +245,36 @@ class Tracking():
 					#h = cv2.boundingRect(h)
 					points = cv2.approxPolyDP(h,0.10*a,True)
 					if len(points) == 4:
-						possibleCards.append(self.get_card(frame, points))
+						corners = self.rectify(points)
+						possibleCards.append((self.get_card(frame, corners), corners))
 						filtered.append(h)
 						#cv2.drawContours(grey_image, points, -1, (0,255,0), 3)
 
 		infoText = 'C - resets background subtraction. D - detects card. Cards: {}'.format(len(filtered))
-		putText(grey_image, infoText, (23,23))
+		putText(frame, infoText, (23,23))
 
 		if (self.stats.has_stats()):
-			putText(grey_image, self.stats.get(), (23, 43))
+			putText(frame, self.stats.get(), (23, 43))
 
-		cv2.drawContours(grey_image, filtered, -1, (0,255,0), 3)
-		cv2.imshow('detected', grey_image)
+		# Run detection when 'D' pressed
+		wk = cv2.waitKey(10)
+		if wk == ord('d'):
+			if len(possibleCards) > 1:
+				optFlow.clear()
+				stats.clear()
+				for cardImg, points in possibleCards[::2]:
+					success, cardName = matcher.match(cardImg)
+					if success:
+						#optFlow.initTrackCards()
+						optFlow.addCard(points, cardName)
+					else:
+						self.stats.add_found_card('Card not found')
+			else:
+				self.stats.add_found_card('No cards in frame')
+
+		cv2.drawContours(frame, filtered, -1, (0,255,0), 3)
+		if debug:
+			cv2.imshow('Background subtraction', grey_image)
 		return possibleCards
 
 	def filter_contours(self, contours):
@@ -258,22 +285,13 @@ class Tracking():
 		return edges
 
 	def get_card(self, img, corners):
-		#target = [(0,0), (223,0), (223,310), (0,310)]
-		corners = self.rectify(corners)
-
-		#x1, y1, x2, y2 = corners
-		#self.get_length(corners)
-
 		target = np.array([ [0,0],[449,0],[449,449],[0,449] ],np.float32)
 		transform = cv2.getPerspectiveTransform(corners, target)
 		warp = cv2.warpPerspective(img,transform,(450,450))
 
-		wk = cv2.waitKey(1)
-		if wk == ord('w'):
-			Training().write_image('test_match_01', warp)
-		if wk == ord('d'):
-			matcher.match(warp)
-
+		#wk = cv2.waitKey(1)
+		#if wk == ord('w'):
+		#	Training().write_image('test_match_01', warp)
 		cv2.imshow('current_card', warp)
 		return warp
 
@@ -369,11 +387,54 @@ class Scan():
 					print "STATE: has moved. waiting for stable"
 				has_moved = True
 
+# Class which wraps the optFlow.py file.
+class OptFlowWrapper:
+
+	def __init__(self):
+		self.optFlow = of.OpticalFlow()
+		self.cardsToTrack = []
+		self.cardFeatures = []
+		self.cardsInView = []
+		self.prevFrame = None
+		self.enabled = False
+
+	def initTrackCards(self):
+		self.cardsToTrack.append(of.CardCorners(8, 'H', 100, 100, 120, 200, 250,100, 300,300))
+		self.cardFeatures, self.cardsInView = self.optFlow.initTrackCards(self.old_gray, self.cardsToTrack)
+		self.enabled = True
+
+	def setPrevFrame(self, old_gray):
+		self.old_gray = old_gray
+
+	# Clears optical flow tracking points and disables
+	def clear(self):
+		self.cardsToTrack = []
+		self.cardFeatures = []
+		self.cardsInView = []
+		self.enabled = False
+
+	def addCard(self, cardCorners, cardNameString):
+			x1, y1, x2, y2, x3, y3, x4, y4 =  list(chain.from_iterable(cardCorners))
+			num, suit = cardNameString.split('_')
+			ofCorners = of.CardCorners(int(num), suit, x1, y1, x2, y2, x3, y3, x4, y4)
+			self.cardsToTrack.append(ofCorners)
+			cardFeatures, cardsInView = self.optFlow.initTrackCards(self.old_gray, self.cardsToTrack)
+			self.cardFeatures.extend(cardFeatures)
+			self.cardsInView.extend(cardsInView)
+			self.enabled = True
+
+	def optFlowOverlay(self, frame, frame_gray):
+		if self.enabled:
+			# Call tracking function
+			self.optFlow.trackCards(frame, self.old_gray, frame_gray, self.cardsInView, self.cardFeatures, showTracking = True)
+			self.optFlow.showCardsInFrame(frame, self.cardsInView)
+
 stats = Stats()
 tracking = Tracking(stats)
 training = Training()
 matcher = Matching(stats)
 timer = Timer()
+optFlow = OptFlowWrapper()
 
 testMode = True
 trainMode = False
@@ -386,17 +447,29 @@ def getImg(frame):
 def test_mode():
 	ret, base = cap.read()
 
+	old_gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
+	optFlow.setPrevFrame(old_gray)
+	#optFlow.initTrackCards()
+
 	while(True):
 		c = cv2.waitKey(20)
 		if c == ord('c'):
 			stats.clear()
 			ret, base = cap.read()
-		if c == ord('e'):
-			sys.exit
+		if c == ord('e') or c == 27:
+			break
 		ret, frame = cap.read()
 
 		diff = tracking.get_diff(frame, base)
 		tracking.detect_card(frame, diff)
+
+		optFlow.setPrevFrame(old_gray)
+		frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+		optFlow.optFlowOverlay(frame, frame_gray)
+
+		cv2.imshow('Main window', frame)
+		old_gray = frame_gray
+
 
 def train():
 	training.train()
@@ -419,7 +492,7 @@ if __name__ == '__main__':
 
 	if trainMode:
 		train()
-		sys.exit
+		sys.exit()
 
 	matcher.detect_points()
 
@@ -431,7 +504,7 @@ if __name__ == '__main__':
 	if testMode:
 		print 'Tracking mode'
 		test_mode()
-		sys.exit
+		sys.exit()
 
 	while(True):
 
