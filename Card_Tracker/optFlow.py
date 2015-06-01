@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
 
+
+
 # GLOBAL VARIABLE - Creates some random colors
 color = np.random.randint(0,255,(100,3))
 
@@ -27,8 +29,21 @@ class CardPosition:
 # Print cards in terminal
 def printCards(cards):
 	for card in cards:
+		if (card.type[1] == 'S'):
+			suit = u'\u2660'.encode('utf-8')
+		elif (card.type[1] == 'C'):
+			suit = u"\u2663".encode('utf-8')
+		elif (card.type[1] == 'H'):
+			suit = u'\u2665'.encode('utf-8')
+		elif (card.type[1] == 'D'):
+			suit = u'\u2666'.encode('utf-8')
+		else:
+			suit = card.type[1]
+
+		string = "%s %s" % (card.type[0], suit)
+
 		print "Card type: "
-		print card.type
+		print string
 		print "Card position: "
 		print card.position
 		print
@@ -36,25 +51,47 @@ def printCards(cards):
 # Prints the card rank and suit for each card in view
 def showCardsInFrame(frame, cardsInView):
 	for card in cardsInView:
-		if (card.type[1] == 'H' or card.type[1] == 'D'):
-			colour = (0,0,255)
-		else:
-			colour = (0,0,0)
-
 		if (card.type[0] == 11):
 			rank = 'J'
 		elif (card.type[0] == 12):
 			rank = 'Q'
 		elif (card.type[0] == 13):
-			rank = 'K'
-		elif (card.type[0] == 14):
+			rank = 'C'
+		elif (card.type[0] == 1 or card.type[0] == 14):
 			rank = 'A'
+		elif (card.type[0] == 0):
+			rank = 'Joker'
 		else:
 			rank = str(card.type[0])
 
+
+		if (card.type[1] == 'S'):
+			colour = (0,0,0)
+
+			suit = u'\u2660'.encode('utf-8')
+		elif (card.type[1] == 'C'):
+			colour = (0,0,0)
+			suit = u"\u2663".encode('utf-8')
+		elif (card.type[1] == 'H'):
+			colour = (0,0,255)
+			suit = u'\u2665'.encode('utf-8')
+		elif (card.type[1] == 'D'):
+			colour = (0,0,255)
+			suit = u'\u2666'.encode('utf-8')
+		elif (card.type[1] == 'R'):
+			colour = (0,0,255)
+			suit = ' '
+		elif (card.type[1] == 'B'):
+			colour = (0,0,0)
+			suit = ' '
+		else:
+			suit = card.type[1]
+			colour = (0,0,0)
+
 		font = cv2.FONT_HERSHEY_SIMPLEX
-		string = "%s %c" % (rank, card.type[1]) 
+		string = "%s%s" % (rank, card.type[1]) 
 		cv2.putText(frame, string, (card.position[0], card.position[1]), font, 1,colour,2)
+		#frame.text((card.position[0], card.position[1]), unicode(string,"utf-8"), font=font, fill=colour)
 
 # Returns feature points and a list of cards to track
 def initTrackCards(old_gray, cardsToTrack):
@@ -140,7 +177,7 @@ def trackCards(frame, old_gray, frame_gray, cardsInView, cardFeatures, showTrack
 
 		
 		except: 
-			print "No more features to track for card"
+			print "Lost track of card."
 			toRemove.append(cardNumber)
 		
 		cardNumber += 1
@@ -158,7 +195,7 @@ def trackCards(frame, old_gray, frame_gray, cardsInView, cardFeatures, showTrack
 cardsToTrack = []
 cardsToTrack.append(CardCorners(8, 'H', 100, 100, 120, 200, 250,100, 300,300))
 cardsToTrack.append(CardCorners(12, 'D', 300, 300, 300, 380, 480,300, 480,380))
-cardsToTrack.append(CardCorners(11, 'K', 30, 30, 30, 38, 48,30, 48,38))
+cardsToTrack.append(CardCorners(11, 'C', 30, 30, 30, 38, 48,30, 48,38))
 
 
 # Setup video capture
