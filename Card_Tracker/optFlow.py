@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
 
+
+
 # GLOBAL VARIABLE - Creates some random colors
 color = np.random.randint(0,255,(100,3))
 
@@ -23,12 +25,28 @@ class CardPosition:
 		self.position = [x, y]
 
 class OpticalFlow:
+		# EXAMPLE CODE
+	# Example "cards" for testing
+
 	# FUNCTIONS
 	# Print cards in terminal
 	def printCards(self, cards):
 		for card in cards:
+			if (card.type[1] == 'S'):
+				suit = u'\u2660'.encode('utf-8')
+			elif (card.type[1] == 'C'):
+				suit = u"\u2663".encode('utf-8')
+			elif (card.type[1] == 'H'):
+				suit = u'\u2665'.encode('utf-8')
+			elif (card.type[1] == 'D'):
+				suit = u'\u2666'.encode('utf-8')
+			else:
+				suit = card.type[1]
+
+			string = "%s %s" % (card.type[0], suit)
+
 			print "Card type: "
-			print card.type
+			print string
 			print "Card position: "
 			print card.position
 			print
@@ -36,25 +54,46 @@ class OpticalFlow:
 	# Prints the card rank and suit for each card in view
 	def showCardsInFrame(self, frame, cardsInView):
 		for card in cardsInView:
-			if (card.type[1] == 'H' or card.type[1] == 'D'):
-				colour = (0,0,255)
-			else:
-				colour = (255,255,255)
-
 			if (card.type[0] == 11):
-				rank = 'J'
+				rank = 'Jack'
 			elif (card.type[0] == 12):
-				rank = 'Q'
+				rank = 'Queen'
 			elif (card.type[0] == 13):
-				rank = 'K'
-			elif (card.type[0] == 14):
-				rank = 'A'
+				rank = 'King'
+			elif (card.type[0] == 1 or card.type[0] == 14):
+				rank = 'Ace'
+			elif (card.type[0] == 0):
+				rank = 'Joker'
 			else:
 				rank = str(card.type[0])
+
+
+			if (card.type[1] == 'S'):
+				colour = (255,255,255)
+				suit = u'\u2660'.encode('utf-8')
+			elif (card.type[1] == 'C'):
+				colour = (255,255,255)
+				suit = u"\u2663".encode('utf-8')
+			elif (card.type[1] == 'H'):
+				colour = (0,0,255)
+				suit = u'\u2665'.encode('utf-8')
+			elif (card.type[1] == 'D'):
+				colour = (0,0,255)
+				suit = u'\u2666'.encode('utf-8')
+			elif (card.type[1] == 'R'):
+				colour = (0,0,255)
+				suit = ' '
+			elif (card.type[1] == 'B'):
+				colour = (255,255,255)
+				suit = ' '
+			else:
+				suit = card.type[1]
+				colour = (255,255,255)
 
 			font = cv2.FONT_HERSHEY_SIMPLEX
 			string = "%s %s" % (rank, card.type[1])
 			cv2.putText(frame, string, (card.position[0], card.position[1]), font, 1,colour,2)
+			#frame.text((card.position[0], card.position[1]), unicode(string,"utf-8"), font=font, fill=colour)
 
 	# Returns feature points and a list of cards to track
 	def initTrackCards(self, old_gray, cardsToTrack):
@@ -88,7 +127,6 @@ class OpticalFlow:
 			cardFeatures.append(p0)
 
 		return cardFeatures, cardsInView
-
 	#
 	def trackCards(self, frame, old_gray, frame_gray, cardsInView, cardFeatures, showTracking = False):
 
@@ -96,9 +134,6 @@ class OpticalFlow:
 		lk_params = dict( winSize  = (15,15),
 							maxLevel = 2,
 							criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
-
-		# Create a mask image for drawing purposes
-		#mask = np.zeros_like(old_frame)
 
 		toRemove = []
 		cardNumber = 0
@@ -135,8 +170,9 @@ class OpticalFlow:
 
 				cardFeatures[cardNumber] = good_new.reshape(-1,1,2)
 
+
 			except:
-				print "No more features to track for card"
+				print "Lost track of card."
 				toRemove.append(cardNumber)
 
 			cardNumber += 1
@@ -146,18 +182,16 @@ class OpticalFlow:
 			garbage1 = cardFeatures.pop(i)
 			garbage2 = cardsInView.pop(i)
 
-	# EXAMPLE CODE
-	# Example "cards" for testing
 
 if __name__ == '__main__':
-
 	optFlow = OpticalFlow()
-
 	cardsToTrack = []
 	cardsToTrack.append(CardCorners(8, 'H', 100, 100, 120, 200, 250,100, 300,300))
+	cardsToTrack.append(CardCorners(8, 'H', 100, 100, 120, 200, 250,100, 300,300))
+	cardsToTrack.append(CardCorners(12, 'D', 300, 300, 300, 380, 480,300, 480,380))
 	cardsToTrack.append(CardCorners(12, 'D', 300, 300, 300, 380, 480,300, 480,380))
 	cardsToTrack.append(CardCorners(11, 'K', 30, 30, 30, 38, 48,30, 48,38))
-
+	cardsToTrack.append(CardCorners(11, 'C', 30, 30, 30, 38, 48,30, 48,38))
 
 	# Setup video capture
 	cap = cv2.VideoCapture(0)
