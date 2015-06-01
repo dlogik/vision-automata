@@ -9,6 +9,7 @@ import time as t
 import math, sys, os
 import optFlow as of
 import threading
+import time
 from itertools import chain
 
 
@@ -37,7 +38,7 @@ class Timer:
 
 def show_debug_img(title, img):
 	if debug:
-		cv2.waitKey(1)
+		#cv2.waitKey(1)
 		cv2.imshow(title, img)
 
 def putText(img, text, pos):
@@ -66,10 +67,33 @@ class Stats():
 # Here we perform matching against cards in the file database.
 class Matching():
 
-	def __init__(self, stats):
+	def __init__(self, stats, optFlow):
 		self.folder = train_folder
 		self.descriptors = {}
 		self.stats = stats
+		self.detecting = False
+		self.card_queue = []
+		self.optFlow = optFlow
+
+	# Worker thread for card matching
+	def match_worker(self):
+		foundNames = []
+		print 'card queue: {}'.format(len(self.card_queue))
+		for cardImg, points in self.card_queue:
+			success, cardName = matcher.match(cardImg)
+			if success:
+				# Filter same cards
+				if any(cardName in f for f in foundNames):
+					print '{} added already'.format(cardName)
+				else:
+					foundNames.append(cardName)
+					self.optFlow.addCard(points, cardName)
+			else:
+				stats.add_found_card('Card not found')
+		if len(foundNames) > 0:
+			self.optFlow.init()
+		self.card_queue = []
+		self.detecting = False
 
 	def test(self):
 		img1 = cv2.imread(self.folder + 'trainedcard_85b.png')
@@ -89,6 +113,18 @@ class Matching():
 		for f in filelist:
 			img = cv2.imread(self.folder + f)
 			self.descriptors[f] = self.sift(img, 'training')
+
+	def match_all_cards(self, cards):
+		if self.detecting:
+			return
+		self.detecting = True
+		print 'detecting: {}'.format(self.detecting)
+		self.optFlow.clear()
+		self.stats.clear()
+		self.stats.add_found_card('Detecting, please wait...')
+		self.card_queue.extend(cards)
+		thread = threading.Thread(target=self.match_worker)
+		thread.start()
 
 	# Matching given image (img) against training files.
 	def match(self, img):
@@ -210,11 +246,13 @@ class Training():
 
 class Tracking():
 
-	def __init__(self, stats):
+	def __init__(self, stats, matcher, display):
 		self.rioImage = None
 		self.canny_thres = 50
 		self.stats = stats
+		self.matcher = matcher
 		self.grey_frame = None
+		self.display = display
 
 	def get_diff(self, grey_image, grey_base):
 		return cv2.absdiff(grey_image, grey_base)
@@ -242,13 +280,12 @@ class Tracking():
 			for h in hull:
 				a = cv2.arcLength(h, True)
 				if a > min_perim:
-					#h = cv2.boundingRect(h)
-					points = cv2.approxPolyDP(h,0.10*a,True)
-					if len(points) == 4:
-						corners = self.rectify(points)
-						possibleCards.append((self.get_card(frame, corners), corners))
-						filtered.append(h)
-						#cv2.drawContours(grey_image, points, -1, (0,255,0), 3)
+						points = cv2.approxPolyDP(h,0.10*a,True)
+						if len(points) == 4:
+							if self.check_corners(h, filtered):
+								filtered.append(h)
+								corners = self.rectify(points)
+								possibleCards.append((self.get_card(frame, corners), corners))
 
 		infoText = 'C - resets background subtraction. D - detects card. Cards: {}'.format(len(filtered))
 		putText(frame, infoText, (23,23))
@@ -257,18 +294,10 @@ class Tracking():
 			putText(frame, self.stats.get(), (23, 43))
 
 		# Run detection when 'D' pressed
-		wk = cv2.waitKey(10)
-		if wk == ord('d'):
-			if len(possibleCards) > 1:
-				optFlow.clear()
-				stats.clear()
-				for cardImg, points in possibleCards[::2]:
-					success, cardName = matcher.match(cardImg)
-					if success:
-						#optFlow.initTrackCards()
-						optFlow.addCard(points, cardName)
-					else:
-						self.stats.add_found_card('Card not found')
+		if self.display.detect_card:
+			self.display.detect_card = False
+			if len(possibleCards) >= 1:
+				self.matcher.match_all_cards(possibleCards)
 			else:
 				self.stats.add_found_card('No cards in frame')
 
@@ -276,6 +305,18 @@ class Tracking():
 		if debug:
 			cv2.imshow('Background subtraction', grey_image)
 		return possibleCards
+
+	def check_corners(self, h1, hulls):
+		if len(hulls) <= 1:
+			return True
+		count = 0
+		for h2 in hulls:
+			match = cv2.matchShapes(h1, h2, cv2.cv.CV_CONTOURS_MATCH_I3, 0) * 1000
+			#print 'hull: {} match: {}'.format(match, count)
+			count += 1
+			if match < 10:
+				return False
+		return True
 
 	def filter_contours(self, contours):
 		edges = []
@@ -414,14 +455,16 @@ class OptFlowWrapper:
 		self.enabled = False
 
 	def addCard(self, cardCorners, cardNameString):
-			x1, y1, x2, y2, x3, y3, x4, y4 =  list(chain.from_iterable(cardCorners))
-			num, suit = cardNameString.split('_')
-			ofCorners = of.CardCorners(int(num), suit, x1, y1, x2, y2, x3, y3, x4, y4)
-			self.cardsToTrack.append(ofCorners)
-			cardFeatures, cardsInView = self.optFlow.initTrackCards(self.old_gray, self.cardsToTrack)
-			self.cardFeatures.extend(cardFeatures)
-			self.cardsInView.extend(cardsInView)
-			self.enabled = True
+		x1, y1, x2, y2, x3, y3, x4, y4 =  list(chain.from_iterable(cardCorners))
+		num, suit = cardNameString.split('_')
+		ofCorners = of.CardCorners(int(num), suit, x1, y1, x2, y2, x3, y3, x4, y4)
+		self.cardsToTrack.append(ofCorners)
+
+	def init(self):
+		cardFeatures, cardsInView = self.optFlow.initTrackCards(self.old_gray, self.cardsToTrack)
+		self.cardFeatures.extend(cardFeatures)
+		self.cardsInView.extend(cardsInView)
+		self.enabled = True
 
 	def optFlowOverlay(self, frame, frame_gray):
 		if self.enabled:
@@ -429,12 +472,61 @@ class OptFlowWrapper:
 			self.optFlow.trackCards(frame, self.old_gray, frame_gray, self.cardsInView, self.cardFeatures, showTracking = True)
 			self.optFlow.showCardsInFrame(frame, self.cardsInView)
 
-stats = Stats()
-tracking = Tracking(stats)
-training = Training()
-matcher = Matching(stats)
-timer = Timer()
+class Display():
+
+	def __init__(self):
+		self.frame = None
+		self.new_background = False
+		self.detect_card = False
+		self.quit = False
+		self.key = -1
+
+	def show_frame(self, frame):
+		self.frame = frame
+
+	def run(self):
+
+		while (True):
+			if self.frame is not None:
+				cv2.imshow('Main window', self.frame)
+				self.key = cv2.waitKey(30)
+			if self.key != -1:
+				print 'Key: {}'.format(self.key)
+				self.quit = (self.key == ord('e') or self.key == 27)
+				self.detect_card = (self.key == ord('d'))
+				self.new_background = self.key == ord('c')
+				print self.detect_card
+			if self.quit:
+				sys.exit()
+
+	@property
+	def quit(self):
+		return self.quit
+
+	@property
+	def detect_card(self):
+		return self.detect_card
+
+	@detect_card.setter
+	def detect_card(self, value):
+		self.detect_card = value
+
+	@property
+	def new_background(self):
+		return self.new_background
+
+	@new_background.setter
+	def new_background(self, value):
+		self.new_background = value
+
+display = Display()
 optFlow = OptFlowWrapper()
+stats = Stats()
+training = Training()
+matcher = Matching(stats, optFlow)
+tracking = Tracking(stats, matcher, display)
+timer = Timer()
+
 
 testMode = True
 trainMode = False
@@ -449,27 +541,25 @@ def test_mode():
 
 	old_gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
 	optFlow.setPrevFrame(old_gray)
-	#optFlow.initTrackCards()
 
 	while(True):
-		c = cv2.waitKey(20)
-		if c == ord('c'):
-			stats.clear()
-			ret, base = cap.read()
-		if c == ord('e') or c == 27:
+		if display.quit:
 			break
-		ret, frame = cap.read()
 
+		if display.new_background:
+			stats.clear()
+			optFlow.clear()
+			ret, base = cap.read()
+			display.new_background = False
+
+		ret, frame = cap.read()
 		diff = tracking.get_diff(frame, base)
 		tracking.detect_card(frame, diff)
-
 		optFlow.setPrevFrame(old_gray)
 		frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 		optFlow.optFlowOverlay(frame, frame_gray)
-
-		cv2.imshow('Main window', frame)
+		display.show_frame(frame)
 		old_gray = frame_gray
-
 
 def train():
 	training.train()
@@ -494,7 +584,7 @@ if __name__ == '__main__':
 		train()
 		sys.exit()
 
-	matcher.detect_points()
+	#matcher.detect_points()
 
 	if matchTest:
 		matcher = Matching()
@@ -503,7 +593,9 @@ if __name__ == '__main__':
 
 	if testMode:
 		print 'Tracking mode'
-		test_mode()
+		main_thread = threading.Thread(target=test_mode)
+		main_thread.start()
+		display.run()
 		sys.exit()
 
 	while(True):
