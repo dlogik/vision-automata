@@ -12,13 +12,23 @@ import threading
 import time
 from itertools import chain
 
-
 # Resize scale factor for performance testing
 resize = 0.7
-debug = True
+
+# Maximum distance used by the FlannBasedMatcher
+MAX_DISTANCE = 0.65
+MIN_MATCH_COUNT = 40
+
+MIN_PERIM = 600
+MAX_PERIM = 1500
+
+# Debug mode
+debug = False
+
+testMode = True
 
 # Folder where image database is stored/written to.
-train_folder = './trained_images/'
+train_folder = './trained_images_tweak/'
 
 class Timer:
 	def __init__(self):
@@ -43,10 +53,6 @@ def show_debug_img(title, img):
 
 def putText(img, text, pos):
 	cv2.putText(img,text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255))
-
-# Maximum distance used by the FlannBasedMatcher
-MAX_DISTANCE = 0.65
-MIN_MATCH_COUNT = 40
 
 class Stats():
 	def __init__(self):
@@ -121,7 +127,7 @@ class Matching():
 		print 'detecting: {}'.format(self.detecting)
 		self.optFlow.clear()
 		self.stats.clear()
-		self.stats.add_found_card('Detecting, please wait...')
+		self.stats.add_found_card('Recognising cards, please wait...')
 		self.card_queue.extend(cards)
 		thread = threading.Thread(target=self.match_worker)
 		thread.start()
@@ -279,15 +285,16 @@ class Tracking():
 		if len(hull) > 2:
 			for h in hull:
 				a = cv2.arcLength(h, True)
-				if a > min_perim:
+				if a > self.display.min_perim and a < self.display.max_perim:
 						points = cv2.approxPolyDP(h,0.10*a,True)
 						if len(points) == 4:
-							if self.check_corners(h, filtered):
-								filtered.append(h)
-								corners = self.rectify(points)
-								possibleCards.append((self.get_card(frame, corners), corners))
+							#print 'Perim: {}'.format(a)
+							#if self.check_corners(h, filtered):
+							filtered.append(h)
+							corners = self.rectify(points)
+							possibleCards.append((self.get_card(frame, corners), corners))
 
-		infoText = 'C - resets background subtraction. D - detects card. Cards: {}'.format(len(filtered))
+		infoText = 'C - resets background subtraction. D - recognises cards. Filtered convex hulls: {}'.format(len(filtered))
 		putText(frame, infoText, (23,23))
 
 		if (self.stats.has_stats()):
@@ -417,6 +424,7 @@ class Scan():
 					has_moved = False
 					been_to_base = True
 					print "STATE: been to base. waiting for move"
+					base = np.copy(grey)
 				elif has_moved and been_to_base:
 					diff = tracking.get_diff(grey, base)
 					tracking.detect_card(frame, diff)
@@ -480,16 +488,42 @@ class Display():
 		self.detect_card = False
 		self.quit = False
 		self.key = -1
+		self.min_perim = MIN_PERIM
+		self.max_perim = MAX_PERIM
+		self.timer = threading.Timer(10, self.on_identification)
+
+	def on_identification(self):
+		print 'Trigger timer...'
+		self.detect_card = True
 
 	def show_frame(self, frame):
 		self.frame = frame
 
+	def on_min_perim_change(self, value):
+		stats.clear()
+		msg = 'Min perimeter: {}'.format(value)
+		stats.add_found_card(msg)
+		print msg
+		self.min_perim = value
+
+	def on_max_perim_change(self, value):
+		stats.clear()
+		msg = 'Max perimeter: {}'.format(value)
+		stats.add_found_card(msg)
+		print msg
+		self.max_perim = value
+
 	def run(self):
+		self.timer.start()
+		cv2.namedWindow('Main window', cv2.WINDOW_OPENGL)
+		cv2.createTrackbar('Min perimeter', 'Main window', MIN_PERIM, MAX_PERIM, self.on_min_perim_change)
+		cv2.createTrackbar('Max perimeter', 'Main window', MAX_PERIM, MAX_PERIM, self.on_max_perim_change)
 
 		while (True):
 			if self.frame is not None:
 				cv2.imshow('Main window', self.frame)
 				self.key = cv2.waitKey(30)
+				timer.print_rate()
 			if self.key != -1:
 				print 'Key: {}'.format(self.key)
 				self.quit = (self.key == ord('e') or self.key == 27)
@@ -498,6 +532,14 @@ class Display():
 				print self.detect_card
 			if self.quit:
 				sys.exit()
+
+	@property
+	def min_perim(self):
+		return self.min_perim
+
+	@property
+	def min_perim(self):
+		return self.max_perim
 
 	@property
 	def quit(self):
@@ -528,7 +570,6 @@ tracking = Tracking(stats, matcher, display)
 timer = Timer()
 
 
-testMode = True
 trainMode = False
 matchTest = False
 
@@ -564,16 +605,20 @@ def test_mode():
 def train():
 	training.train()
 
-	cv2.waitKey()
+	#cv2.waitKey()
 
 if __name__ == '__main__':
-	cv2.namedWindow('frame')
+	cv2.namedWindow('frame', cv2.WINDOW_OPENGL)
+	cv2.namedWindow('Background subtraction', cv2.WINDOW_OPENGL)
+	cv2.namedWindow('current_card', cv2.WINDOW_OPENGL)
 
 	# Capture from built in camera.
 	cap = cv2.VideoCapture(0)
 	scan = Scan(cap)
 
 	# Half resolution
+	#cap.set(cv2.cv.CV_CAP_PROP_FRAME_WIDTH,640)
+	#cap.set(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT,480)
 	cap.set(cv2.cv.CV_CAP_PROP_FRAME_WIDTH,1280)
 	cap.set(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT,720)
 

@@ -67,12 +67,13 @@ class OpticalFlow:
 			else:
 				rank = str(card.type[0])
 
+			purple = (254,102,228)
 
 			if (card.type[1] == 'S'):
-				colour = (255,255,255)
+				colour = purple
 				suit = u'\u2660'.encode('utf-8')
 			elif (card.type[1] == 'C'):
-				colour = (255,255,255)
+				colour = purple
 				suit = u"\u2663".encode('utf-8')
 			elif (card.type[1] == 'H'):
 				colour = (0,0,255)
@@ -84,11 +85,11 @@ class OpticalFlow:
 				colour = (0,0,255)
 				suit = ' '
 			elif (card.type[1] == 'B'):
-				colour = (255,255,255)
+				colour = purple
 				suit = ' '
 			else:
 				suit = card.type[1]
-				colour = (255,255,255)
+				colour = purple
 
 			font = cv2.FONT_HERSHEY_SIMPLEX
 			string = "%s %s" % (rank, card.type[1])
@@ -179,8 +180,8 @@ class OpticalFlow:
 
 		# Remove cards with no feature points
 		for i in reversed(toRemove):
-			garbage1 = cardFeatures.pop(i)
-			garbage2 = cardsInView.pop(i)
+			cardFeatures.pop(i)
+			cardsInView.pop(i)
 
 
 if __name__ == '__main__':
