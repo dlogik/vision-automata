@@ -13,7 +13,7 @@ import time
 from itertools import chain
 
 # Resize scale factor for performance testing
-resize = 0.7
+resize720p = True
 
 # Maximum distance used by the FlannBasedMatcher
 MAX_DISTANCE = 0.65
@@ -22,10 +22,12 @@ MIN_MATCH_COUNT = 40
 MIN_PERIM = 600
 MAX_PERIM = 1500
 
-# Debug mode
-debug = False
+# Show debug windows
+debug = True
 
 testMode = True
+
+version3 = int(cv2.__version__.split('.')[0]) == 3
 
 # Folder where image database is stored/written to.
 train_folder = './trained_images_tweak/'
@@ -45,11 +47,6 @@ class Timer:
 			print "{0} {1}".format('FPS: ', (int)(self.frames / diff))
 			self.start = t.time()
 			self.frames = 0
-
-def show_debug_img(title, img):
-	if debug:
-		#cv2.waitKey(1)
-		cv2.imshow(title, img)
 
 def putText(img, text, pos):
 	cv2.putText(img,text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255))
@@ -154,10 +151,14 @@ class Matching():
 	# Performs SIFT
 	def sift(self, img, name):
 		gray1 = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-		sift = cv2.SIFT(edgeThreshold=15)
+		if version3:
+			sift = cv2.xfeatures2d.SIFT_create(edgeThreshold=15)
+		else:
+			sift = cv2.SIFT(edgeThreshold=15)
 		kp, des = sift.detectAndCompute(gray1,None)
 		key1 = cv2.drawKeypoints(gray1,kp)
-		show_debug_img(name, key1)
+		self.display.set_sift_frame(key1)
+		#show_debug_img(name, key1)
 		return des
 
 	# Brute force matcher (this isn't working)
@@ -266,10 +267,12 @@ class Tracking():
 	def detect_card(self, frame, grey_image, min_perim=600, thresh=200):
 		edges = cv2.Canny(grey_image, thresh, thresh)
 		self.grey_frame = grey_image
+		self.display.set_edges_frame(edges)
 
-		show_debug_img('edges', edges)
-
-		contours, hierarchy = cv2.findContours(edges,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+		if version3:
+			conImage, contours, hierarchy = cv2.findContours(edges,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+		else:
+			contours, hierarchy = cv2.findContours(edges,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
 
 		#print 'contours {}'.format(len(contours))
 		#contours = sorted(contours, key=cv2.contourArea,reverse=True)
@@ -309,8 +312,7 @@ class Tracking():
 				self.stats.add_found_card('No cards in frame')
 
 		cv2.drawContours(frame, filtered, -1, (0,255,0), 3)
-		if debug:
-			cv2.imshow('Background subtraction', grey_image)
+
 		return possibleCards
 
 	def check_corners(self, h1, hulls):
@@ -340,7 +342,7 @@ class Tracking():
 		#wk = cv2.waitKey(1)
 		#if wk == ord('w'):
 		#	Training().write_image('test_match_01', warp)
-		cv2.imshow('current_card', warp)
+		self.display.set_card_frame(warp)
 		return warp
 
 	def get_length(self, corners):
@@ -368,6 +370,9 @@ class Scan():
 
 	def __init__(self, camera):
 		self.camera = camera
+		cv2.namedWindow('frame', cv2.WINDOW_OPENGL)
+		cv2.namedWindow('Background subtraction', cv2.WINDOW_OPENGL)
+		cv2.namedWindow('current_card', cv2.WINDOW_OPENGL)
 
 	#calculates the sum of squared differences (SSD) between two arrays
 	def ssd(self, arr1, arr2):
@@ -484,6 +489,10 @@ class Display():
 
 	def __init__(self):
 		self.frame = None
+		self.edges_frame = None
+		self.card_frame = None
+		self.background_frame = None
+		self.sift_frame = None
 		self.new_background = False
 		self.detect_card = False
 		self.quit = False
@@ -492,12 +501,26 @@ class Display():
 		self.max_perim = MAX_PERIM
 		self.timer = threading.Timer(10, self.on_identification)
 
+	# Sets main display frame
+	def set_frame(self, frame):
+		timer.print_rate()
+		self.frame = frame
+
+	def set_edges_frame(self, frame):
+		self.edges_frame = frame
+
+	def set_card_frame(self, frame):
+		self.card_frame = frame
+
+	def set_background_frame(self, frame):
+		self.background_frame = frame
+
+	def set_sift_frame(self, frame):
+		self.sift_frame = frame
+
 	def on_identification(self):
 		print 'Trigger timer...'
 		self.detect_card = True
-
-	def show_frame(self, frame):
-		self.frame = frame
 
 	def on_min_perim_change(self, value):
 		stats.clear()
@@ -514,16 +537,18 @@ class Display():
 		self.max_perim = value
 
 	def run(self):
-		self.timer.start()
-		cv2.namedWindow('Main window', cv2.WINDOW_OPENGL)
+		self.create_window('Main window')
+		self.create_window('Detected card')
 		cv2.createTrackbar('Min perimeter', 'Main window', MIN_PERIM, MAX_PERIM, self.on_min_perim_change)
 		cv2.createTrackbar('Max perimeter', 'Main window', MAX_PERIM, MAX_PERIM, self.on_max_perim_change)
+		self.setup_debug_windows()
 
 		while (True):
-			if self.frame is not None:
-				cv2.imshow('Main window', self.frame)
-				self.key = cv2.waitKey(30)
-				timer.print_rate()
+			self.show_if_ready('Main window', self.frame)
+			self.show_if_ready('Detected card', self.card_frame)
+			self.show_debug_frames()
+			# Wait for keyboard press
+			self.key = cv2.waitKey(30)
 			if self.key != -1:
 				print 'Key: {}'.format(self.key)
 				self.quit = (self.key == ord('e') or self.key == 27)
@@ -533,12 +558,31 @@ class Display():
 			if self.quit:
 				sys.exit()
 
+	def create_window(self, name):
+		cv2.namedWindow(name, cv2.WINDOW_AUTOSIZE)
+
+	def setup_debug_windows(self):
+		if debug:
+			self.create_window('Edges frame')
+			self.create_window('Background frame')
+			self.create_window('Sift frame')
+
+	def show_debug_frames(self):
+		if debug:
+			self.show_if_ready('Edges frame', self.edges_frame)
+			self.show_if_ready('Background frame', self.background_frame)
+			self.show_if_ready('Sift frame', self.sift_frame)
+
+	def show_if_ready(self, window, frame):
+		if frame is not None:
+			cv2.imshow(window, frame)
+
 	@property
 	def min_perim(self):
 		return self.min_perim
 
 	@property
-	def min_perim(self):
+	def max_perim(self):
 		return self.max_perim
 
 	@property
@@ -569,7 +613,6 @@ matcher = Matching(stats, optFlow)
 tracking = Tracking(stats, matcher, display)
 timer = Timer()
 
-
 trainMode = False
 matchTest = False
 
@@ -595,11 +638,12 @@ def test_mode():
 
 		ret, frame = cap.read()
 		diff = tracking.get_diff(frame, base)
+		display.set_background_frame(diff)
 		tracking.detect_card(frame, diff)
 		optFlow.setPrevFrame(old_gray)
 		frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 		optFlow.optFlowOverlay(frame, frame_gray)
-		display.show_frame(frame)
+		display.set_frame(frame)
 		old_gray = frame_gray
 
 def train():
@@ -608,19 +652,18 @@ def train():
 	#cv2.waitKey()
 
 if __name__ == '__main__':
-	cv2.namedWindow('frame', cv2.WINDOW_OPENGL)
-	cv2.namedWindow('Background subtraction', cv2.WINDOW_OPENGL)
-	cv2.namedWindow('current_card', cv2.WINDOW_OPENGL)
-
 	# Capture from built in camera.
 	cap = cv2.VideoCapture(0)
 	scan = Scan(cap)
 
 	# Half resolution
-	#cap.set(cv2.cv.CV_CAP_PROP_FRAME_WIDTH,640)
-	#cap.set(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT,480)
-	cap.set(cv2.cv.CV_CAP_PROP_FRAME_WIDTH,1280)
-	cap.set(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT,720)
+	if resize720p:
+		if version3:
+			cap.set(cv2.CAP_PROP_FRAME_HEIGHT,1280)
+			cap.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
+		else:
+			cap.set(cv2.cv.CV_CAP_PROP_FRAME_WIDTH,1280)
+			cap.set(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT,720)
 
 	for x in xrange(0, 5):
 		cap.read()
