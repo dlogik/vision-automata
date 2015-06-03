@@ -157,7 +157,8 @@ class Matching():
 		else:
 			sift = cv2.SIFT(edgeThreshold=15)
 		kp, des = sift.detectAndCompute(gray1,None)
-		key1 = cv2.drawKeypoints(gray1,kp)
+		key1 = None
+		cv2.drawKeypoints(gray1,kp, key1)
 		self.display.set_sift_frame(key1)
 		#show_debug_img(name, key1)
 		return des
@@ -538,11 +539,11 @@ class Display():
 		self.max_perim = value
 
 	def run(self):
+		self.setup_debug_windows()
 		self.create_window('Main window')
 		self.create_window('Detected card')
 		cv2.createTrackbar('Min perimeter', 'Main window', MIN_PERIM, MAX_PERIM, self.on_min_perim_change)
 		cv2.createTrackbar('Max perimeter', 'Main window', MAX_PERIM, MAX_PERIM, self.on_max_perim_change)
-		self.setup_debug_windows()
 
 		while (True):
 			self.show_if_ready('Main window', self.frame)
