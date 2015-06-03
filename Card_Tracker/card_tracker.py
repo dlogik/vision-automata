@@ -157,9 +157,12 @@ class Matching():
 		else:
 			sift = cv2.SIFT(edgeThreshold=15)
 		kp, des = sift.detectAndCompute(gray1,None)
-		key1 = None
-		cv2.drawKeypoints(gray1,kp, key1)
-		self.display.set_sift_frame(key1)
+		if version3:
+			sift_frame = img.copy()
+			cv2.drawKeypoints(sift_frame, kp, sift_frame)
+		else:
+			sift_frame = cv2.drawKeypoints(img, kp)
+		self.display.set_sift_frame(sift_frame)
 		#show_debug_img(name, key1)
 		return des
 
@@ -372,9 +375,9 @@ class Scan():
 
 	def __init__(self, camera):
 		self.camera = camera
-		cv2.namedWindow('frame', cv2.WINDOW_OPENGL)
-		cv2.namedWindow('Background subtraction', cv2.WINDOW_OPENGL)
-		cv2.namedWindow('current_card', cv2.WINDOW_OPENGL)
+		#cv2.namedWindow('frame', cv2.WINDOW_OPENGL)
+		#cv2.namedWindow('Background subtraction', cv2.WINDOW_OPENGL)
+		#cv2.namedWindow('current_card', cv2.WINDOW_OPENGL)
 
 	#calculates the sum of squared differences (SSD) between two arrays
 	def ssd(self, arr1, arr2):
