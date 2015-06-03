@@ -70,13 +70,14 @@ class Stats():
 # Here we perform matching against cards in the file database.
 class Matching():
 
-	def __init__(self, stats, optFlow):
+	def __init__(self, stats, optFlow, display):
 		self.folder = train_folder
 		self.descriptors = {}
 		self.stats = stats
 		self.detecting = False
 		self.card_queue = []
 		self.optFlow = optFlow
+		self.display = display
 
 	# Worker thread for card matching
 	def match_worker(self):
@@ -609,7 +610,7 @@ display = Display()
 optFlow = OptFlowWrapper()
 stats = Stats()
 training = Training()
-matcher = Matching(stats, optFlow)
+matcher = Matching(stats, optFlow, display)
 tracking = Tracking(stats, matcher, display)
 timer = Timer()
 
