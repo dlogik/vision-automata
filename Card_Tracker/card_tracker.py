@@ -16,7 +16,7 @@ from itertools import chain
 resize720p = True
 
 # Maximum distance used by the FlannBasedMatcher
-MAX_DISTANCE = 0.65
+MAX_DISTANCE = 0.63
 MIN_MATCH_COUNT = 40
 
 MIN_PERIM = 600
@@ -30,12 +30,16 @@ testMode = True
 version3 = int(cv2.__version__.split('.')[0]) == 3
 
 # Folder where image database is stored/written to.
-train_folder = './trained_images_tweak/'
+train_folder = './trained_images/'
 
 class Timer:
 	def __init__(self):
 		self.frames = 0
 		self.start = t.time()
+		self.msTimer = {}
+		self.msgOutput = {}
+		self.showTimer = True
+		self.count = 0
 
 	def print_rate(self):
 		diff = t.time() - self.start
@@ -47,6 +51,22 @@ class Timer:
 			print "{0} {1}".format('FPS: ', (int)(self.frames / diff))
 			self.start = t.time()
 			self.frames = 0
+
+	def startMSTimer(self, msg):
+		self.msTimer.setdefault(msg, []).append((t.time(), None))
+
+	def stopMSTimer(self, msg):
+		start, end = self.msTimer[msg][-1]
+		diff = (t.time() - start) * 1000
+		self.msgOutput[msg] = "{0}: {1} ms".format(msg, round(diff, 2))
+		#print "{0}: {1} ms".format(msg, round(diff, 2))
+		self.msTimer[msg][-1] = (start, diff)
+		self.msTimer[msg] = []
+
+	def printAll(self):
+		self.print_rate()
+		for key in self.msgOutput.iterkeys():
+			print self.msgOutput[key]
 
 def putText(img, text, pos):
 	cv2.putText(img,text, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255))
@@ -82,9 +102,14 @@ class Matching():
 	# Worker thread for card matching
 	def match_worker(self):
 		foundNames = []
+		timer.startMSTimer('Total sift time:')
 		print 'card queue: {}'.format(len(self.card_queue))
+		count = 0
 		for cardImg, points in self.card_queue:
+			timer.startMSTimer('Per card sift {}:'.format(count))
 			success, cardName = matcher.match(cardImg)
+			timer.stopMSTimer('Per card sift {}:'.format(count))
+			count+=1
 			if success:
 				# Filter same cards
 				if any(cardName in f for f in foundNames):
@@ -98,6 +123,7 @@ class Matching():
 			self.optFlow.init()
 		self.card_queue = []
 		self.detecting = False
+		timer.stopMSTimer('Total sift time:')
 
 	def test(self):
 		img1 = cv2.imread(self.folder + 'trainedcard_85b.png')
@@ -114,9 +140,12 @@ class Matching():
 	def detect_points(self):
 		print 'Detecting features from file database..'
 		filelist = [f for f in os.listdir(self.folder) if f.endswith('.png')]
+		timer.startMSTimer('Database build time cards: {}'.format(len(filelist)))
 		for f in filelist:
 			img = cv2.imread(self.folder + f)
 			self.descriptors[f] = self.sift(img, 'training')
+			print '{} Descriptors: {}'.format(f, len(self.descriptors[f]))
+		timer.stopMSTimer('Database build time cards: {}'.format(len(filelist)))
 
 	def match_all_cards(self, cards):
 		if self.detecting:
@@ -135,6 +164,7 @@ class Matching():
 		if len(self.descriptors) == 0:
 			self.detect_points()
 		des = self.sift(self.sharpen(img), 'sift1')
+		#print 'Input card descriptors: {}'.format(len(des))
 		success, cardName = self.match_all(des)
 		return success, cardName
 
@@ -142,7 +172,7 @@ class Matching():
 	def match_all(self, des):
 		for key in self.descriptors:
 			src_des = self.descriptors[key]
-			if self.flann_matcher(des, src_des):
+			if self.flann_matcher(des, src_des, key):
 				msg = 'found: {}'.format(key)
 				stats.add_found_card(msg)
 				print msg
@@ -185,7 +215,7 @@ class Matching():
 		return True
 
 	# Flann matcher
-	def flann_matcher(self, des1, des2):
+	def flann_matcher(self, des1, des2, card_name):
 		# FLANN parameters
 		FLANN_INDEX_KDTREE = 0
 		index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
@@ -194,9 +224,10 @@ class Matching():
 		flann = cv2.FlannBasedMatcher(index_params,search_params)
 		matches = flann.knnMatch(des1,des2,k=2)
 
+		#print 'Card: {} Matches: {}'.format(card_name, len(matches));
 		goodMatches = []
-		#print 'matches: {}'.format(len(matches))
-
+		#print 'matches: {}'.format(len(matches))e
+		timer.startMSTimer('Flann matcher')
 		''' Filter out matches based on the maximum distance parameter '''
 		for m in matches:
 			if len(m) == 2:
@@ -204,6 +235,7 @@ class Matching():
 					goodMatches.append(m[0])
 		if len(goodMatches) < MIN_MATCH_COUNT:
 			return False
+		timer.stopMSTimer('Flann matcher')
 		#print "Good matches: {}".format(len(goodMatches))
 		return True
 
@@ -267,18 +299,24 @@ class Tracking():
 		self.display = display
 
 	def get_diff(self, grey_image, grey_base):
-		return cv2.absdiff(grey_image, grey_base)
+		timer.startMSTimer('Abs diff')
+		diff = cv2.absdiff(grey_image, grey_base)
+		timer.stopMSTimer('Abs diff')
+		return diff
 
 	def detect_card(self, frame, grey_image, min_perim=600, thresh=200):
+		timer.startMSTimer('Canny filter')
 		edges = cv2.Canny(grey_image, thresh, thresh)
+		timer.stopMSTimer('Canny filter')
 		self.grey_frame = grey_image
 		self.display.set_edges_frame(edges)
 
+		timer.startMSTimer('findContours')
 		if version3:
 			conImage, contours, hierarchy = cv2.findContours(edges,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
 		else:
 			contours, hierarchy = cv2.findContours(edges,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
-
+		timer.stopMSTimer('findContours')
 		#print 'contours {}'.format(len(contours))
 		#contours = sorted(contours, key=cv2.contourArea,reverse=True)
 
@@ -287,7 +325,7 @@ class Tracking():
 
 		filtered = []
 		possibleCards = []
-
+		timer.startMSTimer('Convex hull')
 		# Filter out hulls by calculating the perimeter and
 		# selecting the larger ones.
 		if len(hull) > 2:
@@ -304,7 +342,7 @@ class Tracking():
 
 		infoText = 'C - resets background subtraction. D - recognises cards. Filtered convex hulls: {}'.format(len(filtered))
 		putText(frame, infoText, (23,23))
-
+		timer.stopMSTimer('Convex hull')
 		if (self.stats.has_stats()):
 			putText(frame, self.stats.get(), (23, 43))
 
@@ -341,8 +379,12 @@ class Tracking():
 
 	def get_card(self, img, corners):
 		target = np.array([ [0,0],[449,0],[449,449],[0,449] ],np.float32)
+		timer.startMSTimer('Perspective transform per card')
 		transform = cv2.getPerspectiveTransform(corners, target)
+		timer.stopMSTimer('Perspective transform per card')
+		timer.startMSTimer('Warp perspective per card')
 		warp = cv2.warpPerspective(img,transform,(450,450))
+		timer.stopMSTimer('Warp perspective per card')
 
 		#wk = cv2.waitKey(1)
 		#if wk == ord('w'):
@@ -356,19 +398,18 @@ class Tracking():
 		length = (x2-x1)**2 + (y2-y1)**2 ** 0.5
 		print length
 
-	def rectify(self, h):
-		h = h.reshape((4,2))
-		hnew = np.zeros((4,2),dtype = np.float32)
+	def rectify(self, shape):
+		shape = shape.reshape((4,2))
+		new_shape = np.zeros((4,2),dtype = np.float32)
 
-		add = h.sum(1)
-		hnew[0] = h[np.argmin(add)]
-		hnew[2] = h[np.argmax(add)]
+		add = shape.sum(1)
+		new_shape[0] = shape[np.argmin(add)]
+		new_shape[2] = shape[np.argmax(add)]
+		diff = np.diff(shape,axis = 1)
+		new_shape[1] = shape[np.argmin(diff)]
+		new_shape[3] = shape[np.argmax(diff)]
 
-		diff = np.diff(h,axis = 1)
-		hnew[1] = h[np.argmin(diff)]
-		hnew[3] = h[np.argmax(diff)]
-
-		return hnew
+		return new_shape
 
 # Class used to auto scan cards. Turned off at the moment.
 class Scan():
@@ -508,7 +549,7 @@ class Display():
 
 	# Sets main display frame
 	def set_frame(self, frame):
-		timer.print_rate()
+		#timer.print_rate()
 		self.frame = frame
 
 	def set_edges_frame(self, frame):
@@ -552,6 +593,7 @@ class Display():
 			self.show_if_ready('Main window', self.frame)
 			self.show_if_ready('Detected card', self.card_frame)
 			self.show_debug_frames()
+
 			# Wait for keyboard press
 			self.key = cv2.waitKey(30)
 			if self.key != -1:
@@ -559,12 +601,14 @@ class Display():
 				self.quit = (self.key == ord('e') or self.key == 27)
 				self.detect_card = (self.key == ord('d'))
 				self.new_background = self.key == ord('c')
+				if self.key == ord('p'):
+					timer.printAll()
 				print self.detect_card
 			if self.quit:
 				sys.exit()
 
 	def create_window(self, name):
-		cv2.namedWindow(name, cv2.WINDOW_AUTOSIZE)
+		cv2.namedWindow(name, cv2.WINDOW_OPENGL)
 
 	def setup_debug_windows(self):
 		if debug:
@@ -641,13 +685,19 @@ def test_mode():
 			ret, base = cap.read()
 			display.new_background = False
 
+		timer.startMSTimer('Frame from camera')
 		ret, frame = cap.read()
+		timer.startMSTimer('Frame from camera')
 		diff = tracking.get_diff(frame, base)
 		display.set_background_frame(diff)
+		timer.startMSTimer('Total edge tracking')
 		tracking.detect_card(frame, diff)
+		timer.stopMSTimer('Total edge tracking')
+		timer.startMSTimer('OpticalFlow')
 		optFlow.setPrevFrame(old_gray)
 		frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 		optFlow.optFlowOverlay(frame, frame_gray)
+		timer.stopMSTimer('OpticalFlow')
 		display.set_frame(frame)
 		old_gray = frame_gray
 
@@ -664,7 +714,8 @@ if __name__ == '__main__':
 	# Half resolution
 	if resize720p:
 		if version3:
-			cap.set(cv2.CAP_PROP_FRAME_HEIGHT,1280)
+			print 'Version 3'
+			cap.set(cv2.CAP_PROP_FRAME_WIDTH,1280)
 			cap.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
 		else:
 			cap.set(cv2.cv.CV_CAP_PROP_FRAME_WIDTH,1280)
